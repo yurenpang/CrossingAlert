@@ -1,17 +1,22 @@
 package com.rockpang.crossingalert;
 
 import android.Manifest;
+import android.app.AlertDialog;
+import android.content.Context;
+import android.content.DialogInterface;
 import android.content.pm.PackageManager;
 import android.location.Location;
+import android.location.LocationManager;
 import android.os.AsyncTask;
 import android.os.Looper;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.app.FragmentActivity;
 import android.os.Bundle;
 import android.support.v4.content.ContextCompat;
-import android.util.Log;
+import android.widget.TextView;
 import android.widget.Toast;
 
+import com.google.android.gms.location.FusedLocationProviderClient;
 import com.google.android.gms.location.LocationCallback;
 import com.google.android.gms.location.LocationRequest;
 import com.google.android.gms.location.LocationResult;
@@ -23,31 +28,39 @@ import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.OnMapReadyCallback;
 import com.google.android.gms.maps.SupportMapFragment;
 import com.google.android.gms.maps.model.LatLng;
+import com.google.android.gms.maps.model.Marker;
 import com.google.android.gms.maps.model.MarkerOptions;
+import com.google.android.gms.tasks.OnSuccessListener;
+import com.google.android.gms.tasks.Task;
+import com.google.android.gms.location.LocationListener;
 
-import org.json.JSONException;
 import org.json.JSONObject;
+import org.w3c.dom.Text;
 
 import java.io.BufferedReader;
-import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
 import java.net.URL;
 
 import static com.google.android.gms.location.LocationServices.getFusedLocationProviderClient;
 
-public class MapsActivity extends FragmentActivity implements OnMapReadyCallback {
+public class MapsActivity extends FragmentActivity implements OnMapReadyCallback, LocationListener {
 
     //Test
     private static final String TAG = "MyActivity";
 
+    private TextView tv;
+
     private GoogleMap mMap;
     private LocationRequest mLocationRequest;
     private Location currentLocation;
+    private Marker mCurrocationMarker;
+    private FusedLocationProviderClient mFusedLocationProviderClient;
 
-    private long UPDATE_INTERVAL = 10 * 1000;  /* 10 secs */
-    private long FASTEST_INTERVAL = 2000; /* 2 sec */
+    private static final long UPDATE_INTERVAL = 1000*10;  /* 10 secs */
+    private static final long FASTEST_INTERVAL = 100*10; /* 10 sec */
+    private static final int PERMISSION_REQUEST_CODE = 1234;
 
 
     @Override
@@ -55,18 +68,36 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_maps);
 
-        startLocationUpdates();
+        tv = (TextView) findViewById(R.id.headline);
 
-        // Obtain the SupportMapFragment and get notified when the map is ready to be used.
-        SupportMapFragment mapFragment = (SupportMapFragment) getSupportFragmentManager()
-                .findFragmentById(R.id.map);
-        mapFragment.getMapAsync(this);
+        mFusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(this);
+        if (!checkPermission()) requestPermissions();
+
+        fetchLastLocation();
+        startLocationUpdates();
     }
 
-    /**
-     * Tigger new location updates at interval
-     * Reference: https://github.com/codepath/android_guides/wiki/Retrieving-Location-with-LocationServices-API
-     */
+    private void fetchLastLocation() {
+        if(checkPermission()) {
+            Task<Location> task = mFusedLocationProviderClient.getLastLocation();
+            task.addOnSuccessListener(new OnSuccessListener<Location>() {
+                @Override
+                public void onSuccess(Location location) {
+                    if (location != null) {
+                        currentLocation = location;
+                        SupportMapFragment supportMapFragment = (SupportMapFragment) getSupportFragmentManager().findFragmentById(R.id.map);
+                        supportMapFragment.getMapAsync(MapsActivity.this);
+                    } else {
+                        Toast.makeText(MapsActivity.this, "No Location recorded", Toast.LENGTH_SHORT).show();
+                    }
+                }
+            });
+        } else {
+            requestPermissions();
+        }
+    }
+
+    // Trigger new location updates at interval
     protected void startLocationUpdates() {
         // Create the location request to start receiving updates
         mLocationRequest = new LocationRequest();
@@ -86,28 +117,19 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
 
         // new Google API SDK v11 uses getFusedLocationProviderClient(this)
         if(checkPermission()) {
-            getFusedLocationProviderClient(this).requestLocationUpdates(mLocationRequest, new LocationCallback() {
+
+            mFusedLocationProviderClient.requestLocationUpdates(mLocationRequest, new LocationCallback() {
                         @Override
                         public void onLocationResult(LocationResult locationResult) {
                             // do work here
-                            currentLocation = locationResult.getLastLocation();
-                            onLocationChanged(currentLocation);
-                            new MyTask().execute();
+//                            currentLocation = locationResult.getLastLocation();
+                            onLocationChanged(locationResult.getLastLocation());
                         }
                     },
                     Looper.myLooper());
+        } else {
+            requestPermissions();
         }
-    }
-
-    /**
-     * Find the longitude and latitude of current location
-     * @param location
-     */
-    public void onLocationChanged(Location location) {
-        Toast.makeText(this, locationToString(location), Toast.LENGTH_SHORT).show();
-
-        // You can now create a LatLng Object for use with maps
-        LatLng latLng = new LatLng(location.getLatitude(), location.getLongitude());
     }
 
 
@@ -122,18 +144,31 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     @Override
     public void onMapReady(GoogleMap googleMap) {
         mMap = googleMap;
+        LatLng latLng = new LatLng(currentLocation.getLatitude(),currentLocation.getLongitude());
+        //MarkerOptions are used to create a new Marker.You can specify location, title etc with MarkerOptions
+        MarkerOptions markerOptions = new MarkerOptions().position(latLng).title("You are Here");
+        mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(latLng, 15));
+        //Adding the created the marker on the map
+        mCurrocationMarker = mMap.addMarker(markerOptions);
+    }
 
-        // Add a marker in 1600 Grand Avenue and move the camera
-        LatLng mac = new LatLng(44.938515, -93.167380);
-        mMap.addMarker(new MarkerOptions().position(mac).title("Marker in Sydney"));
-        mMap.moveCamera(CameraUpdateFactory.newLatLng(mac));
-
-        if(checkPermission()) {
-            mMap.setMyLocationEnabled(true);
-            mMap.getUiSettings().setMyLocationButtonEnabled(true);
-        } else {
-            Toast.makeText(this, "Oh No", Toast.LENGTH_SHORT).show();
+    @Override
+    public void onLocationChanged(Location location){
+        if(mCurrocationMarker != null) {
+            mCurrocationMarker.remove();
         }
+
+        tv.setText(locationToString(location));//test
+
+        LatLng latLng = new LatLng(location.getLatitude(), location.getLongitude());
+        //MarkerOptions are used to create a new Marker.You can specify location, title etc with MarkerOptions
+        MarkerOptions markerOptions = new MarkerOptions().position(latLng).title("You are Here");
+        mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(latLng, 15));
+        //Adding the created the marker on the map
+
+        mCurrocationMarker = mMap.addMarker(markerOptions);
+
+        new intersectionTask().execute(urlToString(location));
     }
 
     /**
@@ -145,7 +180,6 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
                 Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
             return true;
         } else {
-            requestPermissions();
             return false;
         }
     }
@@ -153,7 +187,7 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     private void requestPermissions() {
         ActivityCompat.requestPermissions(this,
                 new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
-                1234);
+                PERMISSION_REQUEST_CODE);
     }
 
     private String locationToString(Location location) {
@@ -167,49 +201,70 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     private String urlToString(Location location){
         return "http://api.geonames.org/findNearestIntersectionJSON?lat="
                 + location.getLatitude() + "&lng=" + location.getLongitude()
-                + "&radius=0.01&username=RockMPang";
+                + "&radius=0.2&username=RockMPang";
     }
 
-    private class MyTask extends AsyncTask<Void, Void, Void> {
-        String textResult;
+
+    public class intersectionTask extends AsyncTask<String, Boolean, Boolean> {
+        private String textResult;
 
         @Override
-        protected Void doInBackground(Void... voids) {
-            URL url;
+        protected Boolean doInBackground(String... params) {
+            HttpURLConnection connection = null;
+            BufferedReader reader = null;
+
             try {
-                url = new URL(urlToString(currentLocation));
+                URL url = new URL(params[0]);
+                connection = (HttpURLConnection) url.openConnection();
+                connection.connect();
 
-                BufferedReader br = new BufferedReader(new InputStreamReader(url.openStream()));
+                InputStream stream = connection.getInputStream();
 
-                String stringBuffer;
-                String stringText = "";
+                reader = new BufferedReader(new InputStreamReader(stream));
 
-                while ((stringBuffer = br.readLine()) != null) {
-                    stringText = stringText + stringBuffer;
+                StringBuffer buffer = new StringBuffer();
+                String line = "";
+                while((line = reader.readLine()) != null) {
+                    buffer.append(line);
                 }
+                reader.close();
 
-                br.close();
-                JSONObject json = new JSONObject(stringText);
+                JSONObject json = new JSONObject(buffer.toString());
                 String longitude = (String) json.getJSONObject("intersection").get("lng");
                 String latitude = (String) json.getJSONObject("intersection").get("lat");
-                textResult = "Latitude: " + latitude + "\n" + "Longtitude: " + longitude;
-                Toast.makeText(MapsActivity.this, textResult, Toast.LENGTH_SHORT).show();
-            } catch(MalformedURLException e) {
-                e.printStackTrace();
-                textResult = e.toString();
-            } catch(IOException e) {
-                e.printStackTrace();
-                textResult = e.toString();
-            } catch (JSONException e) {
+
+                if(longitude != null && latitude != null) {
+                    textResult = "Latitude: " + latitude + "\n" + "Longtitude: " + longitude;
+
+                    return true;
+                } else {
+                    return false;
+                }
+            } catch (Exception e) {
                 e.printStackTrace();
             }
-            return null;
+            return false;
         }
 
         @Override
-        protected void onPostExecute(Void aVoid) {
-            Toast.makeText(MapsActivity.this, textResult, Toast.LENGTH_SHORT).show();
-            super.onPostExecute(aVoid);
+        protected void onPostExecute(Boolean isNearIntersection) {
+            super.onPostExecute(isNearIntersection);
+            if(isNearIntersection) {
+                AlertDialog alertDialog = new AlertDialog.Builder(MapsActivity.this).create();
+                alertDialog.setTitle("Alert: Intersection");
+                alertDialog.setMessage("Please be mindful of the intersection");
+                alertDialog.setButton(AlertDialog.BUTTON_NEUTRAL, "OK",
+                        new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int which) {
+                                dialog.dismiss();
+                            }
+                        });
+                alertDialog.show();
+            } else {
+                tv.setText(isNearIntersection.toString());
+            }
+
         }
     }
 }
